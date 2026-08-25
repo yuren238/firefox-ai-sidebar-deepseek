@@ -26,12 +26,23 @@ Firefox packs its UI code into `browser\omni.ja` (a ZIP archive). This patch mod
 
 ## Install
 
+**Option A — universal patcher (recommended): works on Firefox ESR 153.1.x and 154.0.1+**
+
+```powershell
+# Elevated PowerShell, Firefox closed:
+powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1
+```
+
+Ships no binaries: it opens your installed `browser\omni.ja` in place, inserts the DeepSeek entry into `GenAI.sys.mjs`, adds the whale icon, sets the provider-list preference and clears the JS startup cache. The original is backed up to `browser\omni.ja.bak`. Idempotent — safe to re-run after every Firefox update.
+
+**Option B — prebuilt archive: Firefox ESR 153.1.0 ONLY**
+
 ```powershell
 # Elevated PowerShell, Firefox closed:
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The script backs up the original archive to `browser\omni.ja.bak`, replaces it with the patched one, sets the provider-list preference and clears the JS startup cache so the change takes effect immediately.
+Replaces the whole archive with `omni-patched.ja`. Version-locked — do not use on other Firefox versions.
 
 ## Usage
 
@@ -52,7 +63,7 @@ This restores `browser\omni.ja` from the `.bak` backup.
 
 ## Firefox Updates
 
-A Firefox update overwrites `omni.ja` and removes the patch. Simply re-run `install.ps1` afterwards. If a future Firefox changes `GenAI.sys.mjs` internally, re-apply the two edits documented in [`modules_GenAI.sys.mjs`](modules_GenAI.sys.mjs).
+A Firefox update overwrites `omni.ja` and removes the patch. Re-run `Add-DeepSeekToFirefox.ps1` afterwards — it re-applies the patch to whatever version is installed. If a future Firefox changes `GenAI.sys.mjs` beyond recognition, the script will tell you which anchor it could no longer find.
 
 ## ⚠ Disclaimer
 

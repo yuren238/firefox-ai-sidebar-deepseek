@@ -26,12 +26,23 @@ Firefox 的界面代码打包在 `browser\omni.ja`（ZIP 归档）中。本补�
 
 ## 安装
 
+**方式 A —— 通用补丁器（推荐）：支持 Firefox ESR 153.1.x 与 154.0.1+**
+
+```powershell
+# 管理员 PowerShell，Firefox 已关闭：
+powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1
+```
+
+不携带任何二进制：脚本直接就地打开已安装的 `browser\omni.ja`，把 DeepSeek 条目写进 `GenAI.sys.mjs`，添加鲸鱼图标，写入服务商列表偏好并清空 JS 启动缓存。原版自动备份为 `browser\omni.ja.bak`。幂等设计——每次 Firefox 更新后重跑即可。
+
+**方式 B —— 预构建归档：仅限 Firefox ESR 153.1.0**
+
 ```powershell
 # 管理员 PowerShell，Firefox 已关闭：
 powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-脚本会先把原版归档备份为 `browser\omni.ja.bak`，再替换为补丁版，写入服务商列表偏好，并清空 JS 启动缓存，改动即时生效。
+用 `omni-patched.ja` 整体替换归档。版本锁定——请勿用于其他 Firefox 版本。
 
 ## 使用
 
@@ -52,7 +63,7 @@ powershell -ExecutionPolicy Bypass -File .\rollback.ps1
 
 ## Firefox 更新后
 
-Firefox 更新会覆盖 `omni.ja`、移除补丁。更新后重新运行 `install.ps1` 即可。若未来版本改变了 `GenAI.sys.mjs` 内部结构，请参照 [`modules_GenAI.sys.mjs`](modules_GenAI.sys.mjs) 中的两处修改重新打补丁。
+Firefox 更新会覆盖 `omni.ja`、移除补丁。更新后重跑 `Add-DeepSeekToFirefox.ps1` 即可——它会针对当前安装的版本重新应用补丁。若未来版本把 `GenAI.sys.mjs` 改得面目全非，脚本会提示找不到锚点。
 
 ## ⚠ 免责声明
 
