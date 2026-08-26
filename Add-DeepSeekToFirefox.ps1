@@ -372,6 +372,23 @@ try {
         }
     }
 
+    # ---------- 2e-pre. chrome JSM scope has no global setTimeout - import the Timer module ----------
+    if (-not $msrc.Contains('gre/modules/Timer.sys.mjs')) {
+        $anchorExp = 'export const GenAI = {'
+        $timerImp = @'
+import { setTimeout } from "resource://gre/modules/Timer.sys.mjs";
+
+export const GenAI = {
+'@.Replace("`r`n", "`n")
+        if ($msrc.Contains($anchorExp)) {
+            $msrc = $msrc.Replace($anchorExp, $timerImp)
+            $mChanged = $true
+            Write-Host 'GenAI.sys.mjs: Timer import added.'
+        } else {
+            throw 'GenAI export anchor not found'
+        }
+    }
+
     # ---------- 2e. sendAutoSubmit retry: the first STATE_STOP can fire against the
     # pre-navigation document (DeepSeek SPA), losing the AutoSubmit. Retry until the
     # actor of the MOUNTED chat UI is available. ----------
