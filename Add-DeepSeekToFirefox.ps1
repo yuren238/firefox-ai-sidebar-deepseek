@@ -145,8 +145,14 @@ try {
     $csrc = $csrc.Replace("`r`n", "`n")   # normalize line endings (archive entries may be CRLF)
 
     $childChanged = $false
+    # 0) give slow SPAs (DeepSeek) time to mount their input: 1s -> 10s
+    if ($csrc.Contains('tms = 1000')) {
+        $csrc = $csrc.Replace('tms = 1000', 'tms = 10000')
+        $childChanged = $true
+        Write-Host 'GenAIChild.sys.mjs: input wait timeout 1s -> 10s.'
+    }
     if ($csrc.Contains('textarea#chat-input')) {
-        Write-Host 'GenAIChild.sys.mjs already patched for DeepSeek - skipped.'
+        if (-not $childChanged) { Write-Host 'GenAIChild.sys.mjs already patched for DeepSeek - skipped.' }
     } else {
         # 1) recognize the DeepSeek input (<textarea id="chat-input">)
         $oldSel = (@'
