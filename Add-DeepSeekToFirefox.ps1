@@ -267,6 +267,77 @@ try {
         $cs.Write($cb, 0, $cb.Length)
         $cs.Close()
     }
+
+    # ---------- 2d. parent-side markers in GenAI.sys.mjs (visible in parent-only console mode) ----------
+    $me = $zip.GetEntry('modules/GenAI.sys.mjs')
+    if (-not $me) { throw 'modules/GenAI.sys.mjs not found inside omni.ja' }
+    $mr = New-Object IO.StreamReader($me.Open())
+    $msrc = $mr.ReadToEnd()
+    $mr.Close()
+    $msrc = $msrc.Replace("`r`n", "`n")
+
+    $mChanged = $false
+    if ($msrc.Contains('[DS-P]')) {
+        Write-Host 'GenAI.sys.mjs already has [DS-P] markers - skipped.'
+    } else {
+        $p1o = @'
+  async handleAskChat(promptObj, context) {
+'@.Replace("`r`n", "`n")
+        $p1n = @'
+  async handleAskChat(promptObj, context) {
+    console.error("[DS-P] summarize clicked, provider =", lazy.chatProvider);
+'@.Replace("`r`n", "`n")
+        if ($msrc.Contains($p1o)) { $msrc = $msrc.Replace($p1o, $p1n); $mChanged = $true }
+
+        $p2o = @'
+    const { header, queryParam = "q", supportAutoSubmit } = this.chatProviders.get(lazy.chatProvider) ?? {};
+'@.Replace("`r`n", "`n")
+        $p2n = @'
+    const { header, queryParam = "q", supportAutoSubmit } = this.chatProviders.get(lazy.chatProvider) ?? {};
+    console.error("[DS-P] provider config:", JSON.stringify({ header: header || null, queryParam: queryParam, supportAutoSubmit: !!supportAutoSubmit }));
+'@.Replace("`r`n", "`n")
+        if ($msrc.Contains($p2o)) { $msrc = $msrc.Replace($p2o, $p2n); $mChanged = $true }
+
+        $p3o = @'
+      const actor = wgp?.getActor("GenAI");
+      if (!actor) {
+        return;
+      }
+'@.Replace("`r`n", "`n")
+        $p3n = @'
+      const actor = wgp?.getActor("GenAI");
+      console.error("[DS-P] AutoSubmit actor present:", !!actor);
+      if (!actor) {
+        return;
+      }
+'@.Replace("`r`n", "`n")
+        if ($msrc.Contains($p3o)) { $msrc = $msrc.Replace($p3o, $p3n); $mChanged = $true }
+
+        $p4o = @'
+      browser.webProgress?.addProgressListener(
+        injector,
+        Ci.nsIWebProgress.NOTIFY_STATE_DOCUMENT
+      );
+'@.Replace("`r`n", "`n")
+        $p4n = @'
+      console.error("[DS-P] arming sidebar STATE_STOP listener");
+      browser.webProgress?.addProgressListener(
+        injector,
+        Ci.nsIWebProgress.NOTIFY_STATE_DOCUMENT
+      );
+'@.Replace("`r`n", "`n")
+        if ($msrc.Contains($p4o)) { $msrc = $msrc.Replace($p4o, $p4n); $mChanged = $true }
+
+        if ($mChanged) {
+            $me.Delete()
+            $mn = $zip.CreateEntry('modules/GenAI.sys.mjs')
+            $ms = $mn.Open()
+            $mb = (New-Object Text.UTF8Encoding($false)).GetBytes($msrc)
+            $ms.Write($mb, 0, $mb.Length)
+            $ms.Close()
+            Write-Host 'GenAI.sys.mjs: [DS-P] parent markers added.'
+        }
+    }
 } finally {
     $zip.Dispose()
 }
