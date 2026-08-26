@@ -217,6 +217,47 @@ try {
         Write-Host 'GenAIChild.sys.mjs patched: DeepSeek textarea + Enter fallback.'
     }
 
+    # ---------- 2c. diagnostics: report each auto-submit step to the Browser Console ----------
+    # (applies to fresh and already-patched archives alike)
+    $oldDbg1 = @'
+    const win = this.contentWindow;
+    if (!win || win._autosent) {
+      return;
+    }
+'@.Replace("`r`n", "`n")
+    $newDbg1 = @'
+    const win = this.contentWindow;
+    console.error("[DS] AutoSubmit message received");
+    if (!win || win._autosent) {
+      console.error("[DS] blocked: no window or already sent");
+      return;
+    }
+'@.Replace("`r`n", "`n")
+    if ($csrc.Contains($oldDbg1)) { $csrc = $csrc.Replace($oldDbg1, $newDbg1); $childChanged = $true }
+
+    $oldDbg2 = @'
+    if (!editable) {
+      return;
+    }
+'@.Replace("`r`n", "`n")
+    $newDbg2 = @'
+    if (!editable) {
+      console.error("[DS] input NOT found within wait timeout");
+      return;
+    }
+    console.error("[DS] input found:", editable.id || editable.tagName);
+'@.Replace("`r`n", "`n")
+    if ($csrc.Contains($oldDbg2)) { $csrc = $csrc.Replace($oldDbg2, $newDbg2); $childChanged = $true }
+
+    $oldDbg3 = @'
+      const opts = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true };
+'@.Replace("`r`n", "`n")
+    $newDbg3 = @'
+      console.error("[DS] no known send button - using Enter fallback");
+      const opts = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true };
+'@.Replace("`r`n", "`n")
+    if ($csrc.Contains($oldDbg3)) { $csrc = $csrc.Replace($oldDbg3, $newDbg3); $childChanged = $true }
+
     if ($childChanged) {
         $ce.Delete()
         $cn = $zip.CreateEntry('actors/GenAIChild.sys.mjs')
