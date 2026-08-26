@@ -160,7 +160,7 @@ try {
 '#prompt-textarea, [contenteditable], [role="textbox"]'
 '@).TrimEnd()
         $newSel = @'
-'#prompt-textarea, [contenteditable], [role="textbox"], textarea#chat-input'
+'#prompt-textarea, [contenteditable], [role="textbox"], textarea#chat-input, textarea[placeholder*="deepseek" i]'
 '@.TrimEnd()
         $oldSel  = $oldSel.Replace("`r`n", "`n");  $newSel  = $newSel.Replace("`r`n", "`n")
         if (-not $csrc.Contains($oldSel)) { throw 'GenAIChild selector anchor not found - Firefox version may be too new' }
@@ -216,6 +216,19 @@ try {
 
         $childChanged = $true
         Write-Host 'GenAIChild.sys.mjs patched: DeepSeek textarea + Enter fallback.'
+    }
+
+    # ---------- 2b-up. widen the DeepSeek input selector (current DOM ships the textarea WITHOUT id) ----------
+    $oldSelLine = @'
+        '#prompt-textarea, [contenteditable], [role="textbox"], textarea#chat-input'
+'@.Replace("`r`n", "`n")
+    $newSelLine = @'
+        '#prompt-textarea, [contenteditable], [role="textbox"], textarea#chat-input, textarea[placeholder*="deepseek" i]'
+'@.Replace("`r`n", "`n")
+    if ($csrc.Contains($oldSelLine) -and -not $csrc.Contains('placeholder*=')) {
+        $csrc = $csrc.Replace($oldSelLine, $newSelLine)
+        $childChanged = $true
+        Write-Host 'GenAIChild.sys.mjs: DeepSeek selector widened (placeholder match).'
     }
 
     # ---------- 2c. diagnostics: report each auto-submit step to the Browser Console ----------
