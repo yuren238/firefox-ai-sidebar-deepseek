@@ -379,6 +379,7 @@ try {
     const sendAutoSubmit = (br, promptText) => {
       const wgp = br.browsingContext?.currentWindowGlobal;
       const actor = wgp?.getActor("GenAI");
+      console.error("[DS-P] AutoSubmit actor present:", !!actor);
       if (!actor) {
         return;
       }
