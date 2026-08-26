@@ -113,37 +113,58 @@ try {
     $zip.Dispose()
 }
 
-# ---------- 3. user pref so Nimbus experiments cannot hide the entry ----------
-# Locate the REAL default profile via profiles.ini ([Install] Default= is authoritative).
+# ---------- 3. pick which profile(s) to update ----------
+# Enumerate every profile that has a prefs.js, sorted by most recent use
+# (Firefox flushes prefs.js on exit, so newest mtime = last used).
 $profilesRoot = Join-Path $env:APPDATA 'Mozilla\Firefox\Profiles'
-$profileName = $null
-$ini = Join-Path $env:APPDATA 'Mozilla\Firefox\profiles.ini'
-if (Test-Path $ini) {
-    $sections = @{}
-    $cur = $null
-    foreach ($l in Get-Content $ini) {
-        if ($l -match '^\[(.+)\]$') { $cur = $Matches[1]; $sections[$cur] = @{}; continue }
-        if ($cur -and $l -match '^([^=]+)=(.*)$') { $sections[$cur][$Matches[1]] = $Matches[2] }
-    }
-    foreach ($s in $sections.Values) {
-        if ($s.ContainsKey('Default') -and $s['Default'] -like 'Profiles/*') { $profileName = Split-Path $s['Default'] -Leaf; break }
-    }
-    if (-not $profileName) {
-        foreach ($s in $sections.Values) {
-            if ($s.ContainsKey('Path') -and $s['Default'] -eq '1') { $profileName = Split-Path $s['Path'] -Leaf; break }
+$targets = @()
+if (Test-Path $profilesRoot) {
+    $targets = Get-ChildItem $profilesRoot -Directory |
+        Where-Object { Test-Path (Join-Path $_.FullName 'prefs.js') } |
+        Sort-Object { (Get-Item (Join-Path $_.FullName 'prefs.js')).LastWriteTime } -Descending
+}
+if (-not $targets) {
+    Write-Warning 'No Firefox profiles with prefs.js found - set browser.ml.chat.providers manually in about:config.'
+    return
+}
+
+# Resolve the DEFAULT profile for this install exactly the way Firefox does:
+# install dir -> hash (read from HKCU\...\TaskBarIDs, written by Firefox itself)
+# -> [Install<hash>] section in profiles.ini -> Default=Profiles/xxx.
+$recommendedIdx = 0
+$installHash = $null
+$tbid = Get-ItemProperty 'HKCU:\Software\Mozilla\Firefox\TaskBarIDs' -ErrorAction SilentlyContinue
+if ($tbid) {
+    $installHash = $tbid.PSObject.Properties |
+        Where-Object { $_.Name -ieq $FirefoxDir } |
+        Select-Object -First 1 -ExpandProperty Value
+}
+if ($installHash) {
+    $cur = ''
+    foreach ($l in Get-Content (Join-Path $env:APPDATA 'Mozilla\Firefox\profiles.ini')) {
+        if ($l -match '^\[(.+)\]$') { $cur = $Matches[1]; continue }
+        if ($cur -eq "Install$installHash" -and $l -match '^Default=Profiles/(.+)$') {
+            for ($i = 0; $i -lt $targets.Count; $i++) {
+                if ($targets[$i].Name -eq $Matches[1]) { $recommendedIdx = $i; break }
+            }
+            break
         }
     }
 }
-if (-not $profileName -and (Test-Path $profilesRoot)) {
-    $d = Get-ChildItem $profilesRoot -Directory -Filter '*.default-esr*' | Select-Object -First 1
-    if (-not $d) { $d = Get-ChildItem $profilesRoot -Directory -Filter '*.default*' | Select-Object -First 1 }
-    if ($d) { $profileName = $d.Name }
-}
 
-$profilePath = if ($profileName) { Join-Path $profilesRoot $profileName } else { $null }
-if ($profilePath -and (Test-Path (Join-Path $profilePath 'prefs.js'))) {
-    $prefs = Join-Path $profilePath 'prefs.js'
-    $line  = 'user_pref("browser.ml.chat.providers", "claude,chatgpt,gemini,lechat,deepseek");'
+Write-Host ''
+Write-Host 'Detected Firefox profiles (sorted by last use):'
+for ($i = 0; $i -lt $targets.Count; $i++) {
+    $tag = if ($i -eq $recommendedIdx) { '   <-- default profile of this install (recommended, just press Enter)' } else { '' }
+    Write-Host ("  [{0}] {1}{2}" -f ($i + 1), $targets[$i].Name, $tag)
+}
+Write-Host '  [A] ALL of the above (harmless + idempotent)'
+Write-Host ''
+
+$line = 'user_pref("browser.ml.chat.providers", "claude,chatgpt,gemini,lechat,deepseek");'
+function Set-ProviderPref {
+    param([string]$ProfileDir)
+    $prefs = Join-Path $ProfileDir 'prefs.js'
     $content = [IO.File]::ReadAllText($prefs)
     if ($content -match 'user_pref\("browser\.ml\.chat\.providers"') {
         $content = [regex]::Replace($content, 'user_pref\("browser\.ml\.chat\.providers"\s*,[^;]+\);', $line.Replace('$', '$$'))
@@ -151,15 +172,27 @@ if ($profilePath -and (Test-Path (Join-Path $profilePath 'prefs.js'))) {
     } else {
         [IO.File]::AppendAllText($prefs, "`r`n$line`r`n")
     }
-    Write-Host "Preference set for profile $profileName"
-} else {
-    Write-Warning 'Default profile/prefs.js not found - set browser.ml.chat.providers manually in about:config.'
+    Write-Host "Preference set for profile $(Split-Path $ProfileDir -Leaf)"
 }
 
-# ---------- 4. clear JS startup cache ----------
-if ($profilePath -and (Test-Path $profilePath)) {
-    $sc = Join-Path $env:LOCALAPPDATA "Mozilla\Firefox\Profiles\$profileName\startupCache"
-    if (Test-Path $sc) { Remove-Item "$sc\*" -Recurse -Force -ErrorAction SilentlyContinue; Write-Host 'Startup cache cleared' }
+$chosen = $null
+while (-not $chosen) {
+    $answer = Read-Host 'Choose profile to update (Enter = recommended, a number, or A for all)'
+    if ($answer -eq '') { $chosen = @($targets[$recommendedIdx]) }
+    elseif ($answer -match '^[Aa]$') { $chosen = $targets }
+    elseif ($answer -match '^\d+$' -and [int]$answer -ge 1 -and [int]$answer -le $targets.Count) {
+        $chosen = @($targets[[int]$answer - 1])
+    }
+}
+
+# ---------- 4. apply pref + clear JS startup cache for the chosen profiles ----------
+foreach ($t in $chosen) {
+    Set-ProviderPref -ProfileDir $t.FullName
+    $sc = Join-Path $env:LOCALAPPDATA "Mozilla\Firefox\Profiles\$($t.Name)\startupCache"
+    if (Test-Path $sc) {
+        Remove-Item "$sc\*" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Startup cache cleared: $($t.Name)"
+    }
 }
 
 Write-Host "`nDone. Start Firefox and open the AI chatbot sidebar (Ctrl+Alt+X) - DeepSeek is in the dropdown."

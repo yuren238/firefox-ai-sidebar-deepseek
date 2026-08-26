@@ -1,0 +1,7 @@
+# WorkBuddy workspace data
+.workbuddy/
+
+# Local temp artifacts
+_verify.txt
+_reg.txt
+patch_log.txt
