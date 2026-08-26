@@ -231,6 +231,26 @@ try {
         Write-Host 'GenAIChild.sys.mjs: DeepSeek selector widened (placeholder match).'
     }
 
+    # ---------- 2b-up2. mark window right after a successful fill (prevents double-fill on retries) ----------
+    $oldMark = @'
+      editable.dispatchEvent(new win.InputEvent("input", { bubbles: true }));
+    }
+
+    // Explicitly wait for the button is ready
+'@.Replace("`r`n", "`n")
+    $newMark = @'
+      editable.dispatchEvent(new win.InputEvent("input", { bubbles: true }));
+      win._autosent = true;
+    }
+
+    // Explicitly wait for the button is ready
+'@.Replace("`r`n", "`n")
+    if ($csrc.Contains($oldMark) -and -not $csrc.Contains($newMark)) {
+        $csrc = $csrc.Replace($oldMark, $newMark)
+        $childChanged = $true
+        Write-Host 'GenAIChild.sys.mjs: _autosent set after fill.'
+    }
+
     # ---------- 2c. diagnostics: report each auto-submit step to the Browser Console ----------
     # (applies to fresh and already-patched archives alike)
     $oldDbg1 = @'
@@ -350,6 +370,70 @@ try {
             $ms.Close()
             Write-Host 'GenAI.sys.mjs: [DS-P] parent markers added.'
         }
+    }
+
+    # ---------- 2e. sendAutoSubmit retry: the first STATE_STOP can fire against the
+    # pre-navigation document (DeepSeek SPA), losing the AutoSubmit. Retry until the
+    # actor of the MOUNTED chat UI is available. ----------
+    $oldSendAuto = @'
+    const sendAutoSubmit = (br, promptText) => {
+      const wgp = br.browsingContext?.currentWindowGlobal;
+      const actor = wgp?.getActor("GenAI");
+      if (!actor) {
+        return;
+      }
+
+      try {
+        actor.sendAsyncMessage("AutoSubmit", {
+          promptText,
+        });
+      } catch (e) {
+        console.error("error message: ", e);
+      }
+    };
+'@.Replace("`r`n", "`n")
+    $newSendAuto = @'
+    const sendAutoSubmit = (br, promptText) => {
+      let attempts = 0;
+      const trySend = () => {
+        attempts++;
+        let actor = null;
+        try {
+          const wgp = br.browsingContext?.currentWindowGlobal;
+          actor = wgp?.getActor("GenAI");
+        } catch (e) {}
+        console.error("[DS-P] AutoSubmit attempt", attempts, "actor:", !!actor);
+        if (!actor) {
+          if (attempts < 8) {
+            setTimeout(trySend, 2500);
+          }
+          return;
+        }
+        try {
+          actor.sendAsyncMessage("AutoSubmit", {
+            promptText,
+          });
+        } catch (e) {
+          console.error("error message: ", e);
+        }
+      };
+      setTimeout(trySend, 1200);
+    };
+'@.Replace("`r`n", "`n")
+    if ($msrc.Contains($oldSendAuto)) {
+        $msrc = $msrc.Replace($oldSendAuto, $newSendAuto)
+        $mChanged = $true
+        Write-Host 'GenAI.sys.mjs: sendAutoSubmit retry loop added.'
+    }
+
+    if ($mChanged) {
+        $me.Delete()
+        $mn = $zip.CreateEntry('modules/GenAI.sys.mjs')
+        $ms = $mn.Open()
+        $mb = (New-Object Text.UTF8Encoding($false)).GetBytes($msrc)
+        $ms.Write($mb, 0, $mb.Length)
+        $ms.Close()
+        Write-Host 'GenAI.sys.mjs updated.'
     }
 } finally {
     $zip.Dispose()
