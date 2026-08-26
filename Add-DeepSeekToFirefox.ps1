@@ -146,8 +146,9 @@ try {
 
     $childChanged = $false
     # 0) give slow SPAs (DeepSeek) time to mount their input: 1s -> 10s
-    if ($csrc.Contains('tms = 1000')) {
-        $csrc = $csrc.Replace('tms = 1000', 'tms = 10000')
+    # (anchor includes the ")" so it cannot re-match inside "10000")
+    if ($csrc.Contains('tms = 1000)')) {
+        $csrc = $csrc.Replace('tms = 1000)', 'tms = 10000)')
         $childChanged = $true
         Write-Host 'GenAIChild.sys.mjs: input wait timeout 1s -> 10s.'
     }
