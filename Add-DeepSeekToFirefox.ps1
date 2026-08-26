@@ -51,7 +51,7 @@ $entryBody = @'
         header: "X-DeepSeek-Prompt",
         iconUrl: "chrome://browser/content/genai/assets/brands/deepseek.svg",
         id: "deepseek",
-        maxLength: 12000,
+        maxLength: 500,
         name: "DeepSeek",
         supportAutoSubmit: true,
       },
@@ -84,7 +84,15 @@ try {
 
     $moduleChanged = $false
     if ($src.Contains('X-DeepSeek-Prompt')) {
-        Write-Host 'GenAI.sys.mjs already contains the current DeepSeek entry - skipped.'
+        # v2.1+ entry present. Shrink maxLength to fit openresty's ~8KB request limit
+        # (12000-char prompts caused 414 via URL and 400 via header).
+        if ($src.Contains('maxLength: 12000')) {
+            $src = $src.Replace('maxLength: 12000', 'maxLength: 500')
+            $moduleChanged = $true
+            Write-Host 'DeepSeek entry updated: maxLength 12000 -> 500 (server request-size limit).'
+        } else {
+            Write-Host 'GenAI.sys.mjs already up to date - skipped.'
+        }
     } elseif ($src.Contains($oldEntryBody) -or $src.Contains($oldEntryBody.Replace("`n", "`r`n"))) {
         # Upgrade: v1 entry (no header / no auto-submit) -> current entry.
         # Fixes "414 Request-URI Too Large" when summarizing long pages.
