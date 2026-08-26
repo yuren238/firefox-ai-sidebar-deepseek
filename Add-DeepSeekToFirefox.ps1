@@ -48,6 +48,20 @@ $entryBody = @'
     [
       "https://chat.deepseek.com/",
       {
+        header: "X-DeepSeek-Prompt",
+        iconUrl: "chrome://browser/content/genai/assets/brands/deepseek.svg",
+        id: "deepseek",
+        maxLength: 12000,
+        name: "DeepSeek",
+        supportAutoSubmit: true,
+      },
+    ],
+'@
+
+$oldEntryBody = @'
+    [
+      "https://chat.deepseek.com/",
+      {
         iconUrl: "chrome://browser/content/genai/assets/brands/deepseek.svg",
         id: "deepseek",
         maxLength: 12000,
@@ -55,6 +69,10 @@ $entryBody = @'
       },
     ],
 '@
+
+# Normalize multi-line anchors to LF (editor/git may introduce CRLF)
+$entryBody    = $entryBody.Replace("`r`n", "`n")
+$oldEntryBody = $oldEntryBody.Replace("`r`n", "`n")
 
 $zip = [System.IO.Compression.ZipFile]::Open($omni, 'Update')
 try {
@@ -65,8 +83,16 @@ try {
     $reader.Close()
 
     $moduleChanged = $false
-    if ($src.Contains('chat.deepseek.com')) {
-        Write-Host 'GenAI.sys.mjs already contains DeepSeek - entry insertion skipped.'
+    if ($src.Contains('X-DeepSeek-Prompt')) {
+        Write-Host 'GenAI.sys.mjs already contains the current DeepSeek entry - skipped.'
+    } elseif ($src.Contains($oldEntryBody) -or $src.Contains($oldEntryBody.Replace("`n", "`r`n"))) {
+        # Upgrade: v1 entry (no header / no auto-submit) -> current entry.
+        # Fixes "414 Request-URI Too Large" when summarizing long pages.
+        $src = $src.Replace($oldEntryBody, $entryBody).Replace($oldEntryBody.Replace("`n", "`r`n"), $entryBody)
+        $moduleChanged = $true
+        Write-Host 'GenAI.sys.mjs upgraded: DeepSeek now uses header delivery + auto-submit.'
+    } elseif ($src.Contains('chat.deepseek.com')) {
+        Write-Warning 'GenAI.sys.mjs contains an unrecognized DeepSeek entry - left untouched.'
     } else {
         # Insert the entry right before the localhost entry (stable across versions).
         $anchors = @("    [`r`n      `"http://localhost:8080`",", "    [`n      `"http://localhost:8080`",")
@@ -108,6 +134,90 @@ try {
         $ss.Write($sb, 0, $sb.Length)
         $ss.Close()
         Write-Host 'Icon added: brands/deepseek.svg'
+    }
+
+    # ---------- 2b. patch GenAIChild.sys.mjs: teach auto-submit about DeepSeek ----------
+    $ce = $zip.GetEntry('actors/GenAIChild.sys.mjs')
+    if (-not $ce) { throw 'actors/GenAIChild.sys.mjs not found inside omni.ja' }
+    $cr = New-Object IO.StreamReader($ce.Open())
+    $csrc = $cr.ReadToEnd()
+    $cr.Close()
+    $csrc = $csrc.Replace("`r`n", "`n")   # normalize line endings (archive entries may be CRLF)
+
+    $childChanged = $false
+    if ($csrc.Contains('textarea#chat-input')) {
+        Write-Host 'GenAIChild.sys.mjs already patched for DeepSeek - skipped.'
+    } else {
+        # 1) recognize the DeepSeek input (<textarea id="chat-input">)
+        $oldSel = (@'
+'#prompt-textarea, [contenteditable], [role="textbox"]'
+'@).TrimEnd()
+        $newSel = @'
+'#prompt-textarea, [contenteditable], [role="textbox"], textarea#chat-input'
+'@.TrimEnd()
+        $oldSel  = $oldSel.Replace("`r`n", "`n");  $newSel  = $newSel.Replace("`r`n", "`n")
+        if (-not $csrc.Contains($oldSel)) { throw 'GenAIChild selector anchor not found - Firefox version may be too new' }
+        $csrc = $csrc.Replace($oldSel, $newSel)
+
+        # 2) fill textareas through the native value setter (textContent does not work on them)
+        $oldFill = @'
+    if (!editable.textContent) {
+      editable.textContent = promptText;
+      editable.dispatchEvent(new win.InputEvent("input", { bubbles: true }));
+    }
+'@
+        $newFill = @'
+    if (!editable.textContent) {
+      if (editable.tagName == "TEXTAREA") {
+        const setter = Object.getOwnPropertyDescriptor(
+          win.HTMLTextAreaElement.prototype,
+          "value"
+        ).set;
+        setter.call(editable, promptText);
+      } else {
+        editable.textContent = promptText;
+      }
+      editable.dispatchEvent(new win.InputEvent("input", { bubbles: true }));
+    }
+'@
+        $oldFill = $oldFill.Replace("`r`n", "`n"); $newFill = $newFill.Replace("`r`n", "`n")
+        if (-not $csrc.Contains($oldFill)) { throw 'GenAIChild fill anchor not found' }
+        $csrc = $csrc.Replace($oldFill, $newFill)
+
+        # 3) fall back to simulating Enter when no known send button exists
+        $oldSend = @'
+    if (submitBtn) {
+      submitBtn.click();
+      win._autosent = true;
+    }
+'@
+        $newSend = @'
+    if (submitBtn) {
+      submitBtn.click();
+      win._autosent = true;
+    } else {
+      const opts = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true };
+      editable.dispatchEvent(new win.KeyboardEvent("keydown", opts));
+      editable.dispatchEvent(new win.KeyboardEvent("keypress", opts));
+      editable.dispatchEvent(new win.KeyboardEvent("keyup", opts));
+      win._autosent = true;
+    }
+'@
+        $oldSend = $oldSend.Replace("`r`n", "`n"); $newSend = $newSend.Replace("`r`n", "`n")
+        if (-not $csrc.Contains($oldSend)) { throw 'GenAIChild submit anchor not found' }
+        $csrc = $csrc.Replace($oldSend, $newSend)
+
+        $childChanged = $true
+        Write-Host 'GenAIChild.sys.mjs patched: DeepSeek textarea + Enter fallback.'
+    }
+
+    if ($childChanged) {
+        $ce.Delete()
+        $cn = $zip.CreateEntry('actors/GenAIChild.sys.mjs')
+        $cs = $cn.Open()
+        $cb = (New-Object Text.UTF8Encoding($false)).GetBytes($csrc)
+        $cs.Write($cb, 0, $cb.Length)
+        $cs.Close()
     }
 } finally {
     $zip.Dispose()
