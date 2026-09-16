@@ -37,9 +37,14 @@ Double-click `install-deepseek.bat` in Explorer, click **Yes** on the UAC prompt
 ```powershell
 # Admin PowerShell, Firefox closed:
 powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1
+
+# Non-interactive (no profile menu; patches the recommended profile):
+powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -Auto
 ```
 
 The script opens the installed `browser\omni.ja` in place and patches it — no binaries are shipped. Idempotent: just re-run after every Firefox update.
+
+> **Troubleshooting — patched but DeepSeek not in the dropdown**: Firefox keeps compiled copies of its modules in the profile's **startup cache**, which lives under `%LOCALAPPDATA%\Mozilla\Firefox\Profiles\<profile>\startupCache` (not Roaming). The script clears it, but if the run was interrupted before that step, delete the folder manually and restart Firefox.
 
 ## Usage
 

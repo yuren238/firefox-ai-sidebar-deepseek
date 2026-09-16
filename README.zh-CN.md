@@ -37,9 +37,14 @@ Firefox 的界面代码打包在 `browser\omni.ja`（ZIP 归档）中。补丁�
 ```powershell
 # 管理员 PowerShell，Firefox 已关闭：
 powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1
+
+# 非交互模式（不出 profile 菜单，直接补丁推荐 profile）：
+powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -Auto
 ```
 
 脚本直接就地打开已安装的 `browser\omni.ja` 打补丁，不携带任何二进制。幂等设计——每次 Firefox 更新后重跑即可。
+
+> **排障 —— 已安装但下拉菜单里没有 DeepSeek**：Firefox 会把模块的编译产物缓存在 profile 的**启动缓存**里，位置在 `%LOCALAPPDATA%\Mozilla\Firefox\Profiles\<profile>\startupCache`（注意是 Local 而不是 Roaming）。脚本会自动清理；如果那次运行在中途被打断没执行到这一步，手动删除该文件夹后重启 Firefox 即可。
 
 ## 使用
 

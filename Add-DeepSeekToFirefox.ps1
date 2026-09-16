@@ -23,7 +23,11 @@
     PS> .\Add-DeepSeekToFirefox.ps1
 #>
 param(
-    [string]$FirefoxDir = 'C:\Program Files\Mozilla Firefox'
+    [string]$FirefoxDir = 'C:\Program Files\Mozilla Firefox',
+    # Skip the profile menu and patch the recommended (install-default) profile.
+    # Also makes the script safe when stdin is closed or exhausted (piped input):
+    # Read-Host then returns $null, which must not loop forever.
+    [switch]$Auto
 )
 $ErrorActionPreference = 'Stop'
 
@@ -528,12 +532,19 @@ function Set-ProviderPref {
 }
 
 $chosen = $null
-while (-not $chosen) {
-    $answer = Read-Host 'Choose profile to update (Enter = recommended, a number, or A for all)'
-    if ($answer -eq '') { $chosen = @($targets[$recommendedIdx]) }
-    elseif ($answer -match '^[Aa]$') { $chosen = $targets }
-    elseif ($answer -match '^\d+$' -and [int]$answer -ge 1 -and [int]$answer -le $targets.Count) {
-        $chosen = @($targets[[int]$answer - 1])
+if ($Auto) {
+    $chosen = @($targets[$recommendedIdx])
+    Write-Host "Auto mode: using recommended profile $($chosen[0].Name)"
+} else {
+    while (-not $chosen) {
+        $answer = Read-Host 'Choose profile to update (Enter = recommended, a number, or A for all)'
+        # [string]::IsNullOrEmpty also catches $null (stdin closed/exhausted under
+        # redirected input), otherwise the menu would loop forever.
+        if ([string]::IsNullOrEmpty($answer)) { $chosen = @($targets[$recommendedIdx]) }
+        elseif ($answer -match '^[Aa]$') { $chosen = $targets }
+        elseif ($answer -match '^\d+$' -and [int]$answer -ge 1 -and [int]$answer -le $targets.Count) {
+            $chosen = @($targets[[int]$answer - 1])
+        }
     }
 }
 
