@@ -18,6 +18,8 @@ Firefox's UI code is packaged in `browser\omni.ja` (a ZIP archive). The patch do
 - **Set the preference**: writes a user-level `browser.ml.chat.providers` pref to the profile's `prefs.js` so Mozilla Nimbus experiments cannot hide the entry.
 - **Clear the startup cache**: empties the profile's `startupCache` so the patched module takes effect immediately.
 
+If this session cannot write to `omni.ja`, the script **re-executes itself as SYSTEM through a scheduled task**, reads the resulting log back and removes the task again — fully automatic. The usual cause is a filesystem sandbox (union/overlay filesystems, containers) or a security suite's "file protection": the tell-tale sign is that you **can create new files but cannot modify existing ones**, and elevation does not help because the block sits in a filter driver. See `Run-AsSystem.ps1`.
+
 On machines with multiple profiles or several Firefox installs, the script identifies the default profile of the current install **the same way Firefox itself does** — the `TaskBarIDs` registry key (`HKCU\Software\Mozilla\Firefox\TaskBarIDs`) maps each install directory to its hash, which selects the `[Install<hash>]` section in `profiles.ini`. That profile is marked as recommended; you can still pick any other profile or all of them from the menu.
 
 ## Requirements
@@ -40,6 +42,12 @@ powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1
 
 # Non-interactive (no profile menu; patches the recommended profile):
 powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -Auto
+
+# On machines known to block the write: skip the direct attempt, go straight to SYSTEM:
+powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -Auto -ForceSystemFallback
+
+# The opposite: never re-execute as SYSTEM, fail loudly instead:
+powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -NoSystemFallback
 ```
 
 The script opens the installed `browser\omni.ja` in place and patches it — no binaries are shipped. Idempotent: just re-run after every Firefox update.
@@ -61,23 +69,21 @@ The script opens the installed `browser\omni.ja` in place and patches it — no 
 powershell -ExecutionPolicy Bypass -File .\rollback.ps1
 ```
 
-Restores `browser\omni.ja` from the `.bak` backup. Backups are **version-keyed**: the script records the backed-up Firefox version in `browser\omni.ja.bak.version` and refreshes the backup from the clean new archive whenever Firefox is upgraded, so a rollback always matches the installed version.
+Restores `browser\omni.ja` from the `.bak` backup (it has the same automatic SYSTEM fallback). Backups are **version-keyed**: the script records the backed-up Firefox version in `browser\omni.ja.bak.version` and refreshes the backup from the clean new archive whenever Firefox is upgraded, so a rollback always matches the installed version.
 
 ## After a Firefox update
 
 Firefox updates overwrite `omni.ja` and remove the patch. Re-run `install-deepseek.bat` after updating (the backup refreshes itself for the new version). If a future version changes `GenAI.sys.mjs` beyond recognition, the script will tell you the anchor was not found.
 
-> **Troubleshooting — "access to the path omni.ja is denied"**: something is intercepting the write. This happens with filesystem sandboxes (union/overlay filesystems, containers) or security-suite "file protection", and the tell-tale sign is that you **can create new files but cannot modify or delete existing ones** — elevation does not help, because the block sits in a filter driver, not in the ACL. Run the patcher as SYSTEM through a scheduled task to bypass it:
+> **Troubleshooting — "access to the path omni.ja is denied"**: something is intercepting the write. This happens with filesystem sandboxes (union/overlay filesystems, containers) or security-suite "file protection", and the tell-tale sign is that you **can create new files but cannot modify or delete existing ones** — elevation does not help, because the block sits in a filter driver, not in the ACL.
 >
-> ```powershell
-> # Admin PowerShell, Firefox closed:
-> $act  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c "C:\path\to\install-deepseek.bat"'
-> $prin = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-> Register-ScheduledTask -TaskName 'DS_Patch' -Action $act -Principal $prin -Force
-> Start-ScheduledTask -TaskName 'DS_Patch'
-> ```
+> **The script now handles this automatically.** When it detects that it cannot write, it registers a SYSTEM scheduled task that re-executes itself, bypassing that layer, then prints the resulting log and cleans the task up. You will see a transitional message starting with `Writes to the Firefox install directory were refused in this session.` followed by the full log between `--- begin output of the SYSTEM session ---` and its end marker.
 >
-> Note: as SYSTEM, `%APPDATA%` points at the system account's profile — set `APPDATA` / `LOCALAPPDATA` / `USERPROFILE` to the target user inside the batch first, or the script will not find the Firefox profile.
+> Two things to know:
+> - A SYSTEM session has no console input, so the **profile menu is unavailable** and the recommended (install-default) profile is used. If you need a different profile, run the script in an environment where the write is not blocked.
+> - The script re-points `APPDATA` / `LOCALAPPDATA` / `USERPROFILE` / `TEMP` at the calling user before doing its work, so profiles and the startup cache are still resolved correctly.
+>
+> If even the SYSTEM run cannot write (a deeper security product, typically), `-NoSystemFallback` makes the script fail immediately instead of going through the motion — at that point you have to temporarily disable the offending file protection.
 
 ## ⚠ Disclaimer
 

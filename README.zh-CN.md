@@ -18,6 +18,8 @@ Firefox 的界面代码打包在 `browser\omni.ja`（ZIP 归档）中。补丁�
 - **写入偏好**：向 profile 的 `prefs.js` 写入用户级 `browser.ml.chat.providers`，防止 Mozilla Nimbus 实验把条目隐藏。
 - **清启动缓存**：清空 profile 的 `startupCache`，确保补丁后的模块立即生效。
 
+若当前会话无法写入 `omni.ja`，脚本会**自动改以 SYSTEM 身份通过计划任务重新执行自己**，跑完回读日志、清理任务。这一步全自动，无需额外操作。触发的原因通常是文件系统沙箱（联合文件系统/容器 overlay）或安全软件的「文件保护」——特征是**能新建文件、却不能改写已有文件**，且提权无效（拦截在驱动层，与权限无关）。实现见 `Run-AsSystem.ps1`。
+
 多 profile / 多安装的机器上，脚本会**按 Firefox 自己的解析方式**识别当前安装的默认 profile——注册表 `TaskBarIDs`（`HKCU\Software\Mozilla\Firefox\TaskBarIDs`）记录了每个安装目录对应的哈希，用它选中 `profiles.ini` 里的 `[Install<哈希>]` 段。该 profile 会被标为推荐项；你也可以在菜单里手动指定其他 profile 或选择全部。
 
 ## 环境要求
@@ -40,6 +42,12 @@ powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1
 
 # 非交互模式（不出 profile 菜单，直接补丁推荐 profile）：
 powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -Auto
+
+# 已知写入会被拦截的机器：跳过直连尝试，直接走 SYSTEM 计划任务：
+powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -Auto -ForceSystemFallback
+
+# 反向开关：禁止自动降级，遇到写入被拒就直接报错退出：
+powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -NoSystemFallback
 ```
 
 脚本直接就地打开已安装的 `browser\omni.ja` 打补丁，不携带任何二进制。幂等设计——每次 Firefox 更新后重跑即可。
@@ -61,23 +69,21 @@ powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -Auto
 powershell -ExecutionPolicy Bypass -File .\rollback.ps1
 ```
 
-脚本会用 `.bak` 备份还原 `browser\omni.ja`。备份**按版本管理**：脚本会在 `browser\omni.ja.bak.version` 里记录备份对应的 Firefox 版本，一旦检测到 Firefox 升级，就自动用新版干净归档刷新备份——因此回滚结果始终与当前安装版本匹配。
+脚本会用 `.bak` 备份还原 `browser\omni.ja`（同样具备上面那套自动 SYSTEM 降级）。备份**按版本管理**：脚本会在 `browser\omni.ja.bak.version` 里记录备份对应的 Firefox 版本，一旦检测到 Firefox 升级，就自动用新版干净归档刷新备份——因此回滚结果始终与当前安装版本匹配。
 
 ## Firefox 更新后
 
 Firefox 更新会覆盖 `omni.ja`、移除补丁。更新后重跑 `install-deepseek.bat` 即可（备份会自动按新版本刷新）。若未来版本把 `GenAI.sys.mjs` 改得面目全非，脚本会提示找不到锚点。
 
-> **排障 —— 报「对路径 omni.ja 的访问被拒绝」**：说明写入被拦截。常见于文件系统沙箱（联合文件系统/容器）或安全软件的「文件保护」，典型特征是**能新建文件、却不能改写或删除已有文件**，且提权也无效（拦截在驱动层，与权限无关）。此时用计划任务以 SYSTEM 身份运行即可绕过：
+> **排障 —— 报「对路径 omni.ja 的访问被拒绝」**：说明写入被拦截。常见于文件系统沙箱（联合文件系统/容器）或安全软件的「文件保护」，典型特征是**能新建文件、却不能改写或删除已有文件**，且提权也无效（拦截在驱动层，与权限无关）。
 >
-> ```powershell
-> # 管理员 PowerShell，Firefox 已关闭：
-> $act  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c "C:\path\to\install-deepseek.bat"'
-> $prin = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-> Register-ScheduledTask -TaskName 'DS_Patch' -Action $act -Principal $prin -Force
-> Start-ScheduledTask -TaskName 'DS_Patch'
-> ```
+> 这种情况**脚本现在会自动处理**：检测到无法写入时，会注册一个 SYSTEM 计划任务重新执行自己，绕过该过滤层，跑完回读日志打印出来，并清理掉任务。你会在输出里看到以 `Writes to the Firefox install directory were refused in this session.` 开头的一段过渡说明，随后是 `--- begin output of the SYSTEM session ---` 包裹的完整日志。
 >
-> 注意：以 SYSTEM 身份运行时，脚本读到的 `%APPDATA%` 是系统账号的目录，需要在批处理里先把 `APPDATA` / `LOCALAPPDATA` / `USERPROFILE` 指向目标用户，否则找不到 Firefox profile。
+> 两点注意：
+> - SYSTEM 模式下没有控制台输入，**profile 菜单不可用**，会直接使用推荐（安装默认）的 profile。需要指定其他 profile 时，请在不受该拦截影响的环境下运行。
+> - 脚本作为 SYSTEM 运行时会把 `APPDATA` / `LOCALAPPDATA` / `USERPROFILE` / `TEMP` 重新指向调用者用户，所以 profile 与启动缓存仍然定位正确。
+>
+> 如果自动降级也失败（SYSTEM 下仍写不进去，通常是更底层的安全产品），用 `-NoSystemFallback` 可以让脚本立刻报错而不是折腾一轮；此时只能临时关闭对应的文件保护功能。
 
 ## ⚠ 免责声明
 
