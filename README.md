@@ -61,11 +61,23 @@ The script opens the installed `browser\omni.ja` in place and patches it — no 
 powershell -ExecutionPolicy Bypass -File .\rollback.ps1
 ```
 
-Restores `browser\omni.ja` from the `.bak` backup.
+Restores `browser\omni.ja` from the `.bak` backup. Backups are **version-keyed**: the script records the backed-up Firefox version in `browser\omni.ja.bak.version` and refreshes the backup from the clean new archive whenever Firefox is upgraded, so a rollback always matches the installed version.
 
 ## After a Firefox update
 
-Firefox updates overwrite `omni.ja` and remove the patch. Re-run `install-deepseek.bat` after updating. If a future version changes `GenAI.sys.mjs` beyond recognition, the script will tell you the anchor was not found.
+Firefox updates overwrite `omni.ja` and remove the patch. Re-run `install-deepseek.bat` after updating (the backup refreshes itself for the new version). If a future version changes `GenAI.sys.mjs` beyond recognition, the script will tell you the anchor was not found.
+
+> **Troubleshooting — "access to the path omni.ja is denied"**: something is intercepting the write. This happens with filesystem sandboxes (union/overlay filesystems, containers) or security-suite "file protection", and the tell-tale sign is that you **can create new files but cannot modify or delete existing ones** — elevation does not help, because the block sits in a filter driver, not in the ACL. Run the patcher as SYSTEM through a scheduled task to bypass it:
+>
+> ```powershell
+> # Admin PowerShell, Firefox closed:
+> $act  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c "C:\path\to\install-deepseek.bat"'
+> $prin = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+> Register-ScheduledTask -TaskName 'DS_Patch' -Action $act -Principal $prin -Force
+> Start-ScheduledTask -TaskName 'DS_Patch'
+> ```
+>
+> Note: as SYSTEM, `%APPDATA%` points at the system account's profile — set `APPDATA` / `LOCALAPPDATA` / `USERPROFILE` to the target user inside the batch first, or the script will not find the Firefox profile.
 
 ## ⚠ Disclaimer
 

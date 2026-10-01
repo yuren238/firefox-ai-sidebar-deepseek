@@ -61,11 +61,23 @@ powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -Auto
 powershell -ExecutionPolicy Bypass -File .\rollback.ps1
 ```
 
-脚本会用 `.bak` 备份还原 `browser\omni.ja`。
+脚本会用 `.bak` 备份还原 `browser\omni.ja`。备份**按版本管理**：脚本会在 `browser\omni.ja.bak.version` 里记录备份对应的 Firefox 版本，一旦检测到 Firefox 升级，就自动用新版干净归档刷新备份——因此回滚结果始终与当前安装版本匹配。
 
 ## Firefox 更新后
 
-Firefox 更新会覆盖 `omni.ja`、移除补丁。更新后重跑 `install-deepseek.bat` 即可。若未来版本把 `GenAI.sys.mjs` 改得面目全非，脚本会提示找不到锚点。
+Firefox 更新会覆盖 `omni.ja`、移除补丁。更新后重跑 `install-deepseek.bat` 即可（备份会自动按新版本刷新）。若未来版本把 `GenAI.sys.mjs` 改得面目全非，脚本会提示找不到锚点。
+
+> **排障 —— 报「对路径 omni.ja 的访问被拒绝」**：说明写入被拦截。常见于文件系统沙箱（联合文件系统/容器）或安全软件的「文件保护」，典型特征是**能新建文件、却不能改写或删除已有文件**，且提权也无效（拦截在驱动层，与权限无关）。此时用计划任务以 SYSTEM 身份运行即可绕过：
+>
+> ```powershell
+> # 管理员 PowerShell，Firefox 已关闭：
+> $act  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c "C:\path\to\install-deepseek.bat"'
+> $prin = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+> Register-ScheduledTask -TaskName 'DS_Patch' -Action $act -Principal $prin -Force
+> Start-ScheduledTask -TaskName 'DS_Patch'
+> ```
+>
+> 注意：以 SYSTEM 身份运行时，脚本读到的 `%APPDATA%` 是系统账号的目录，需要在批处理里先把 `APPDATA` / `LOCALAPPDATA` / `USERPROFILE` 指向目标用户，否则找不到 Firefox profile。
 
 ## ⚠ 免责声明
 

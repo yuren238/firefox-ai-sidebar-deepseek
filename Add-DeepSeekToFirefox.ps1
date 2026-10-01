@@ -35,10 +35,68 @@ $omni = Join-Path $FirefoxDir 'browser\omni.ja'
 if (-not (Test-Path $omni)) { throw "omni.ja not found: $omni" }
 if (Get-Process firefox -ErrorAction SilentlyContinue) { throw 'Firefox is running - close it first' }
 
-# ---------- 1. backup (once) ----------
+# ---------- 1. backup (refreshed whenever Firefox changes version) ----------
+# A Firefox update replaces browser\omni.ja with a clean, unpatched archive. The
+# old backup then belongs to a different version, and restoring it into the new
+# install would break Firefox. So the backup is keyed to the installed version:
+# refresh it whenever application.ini reports a version we have not backed up.
+#
+# Guard: never capture an already-patched archive as the "clean" backup. We look
+# for our own icon entry name, which is stored uncompressed in the zip headers.
+function Test-ArchivePatched {
+    param([string]$Path)
+    $needle = 'deepseek.svg'
+    $fs = [IO.File]::OpenRead($Path)
+    try {
+        $buf = New-Object byte[] (1MB)
+        $tail = New-Object byte[] 0
+        while (($read = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
+            $chunk = New-Object byte[] ($tail.Length + $read)
+            [Array]::Copy($tail, 0, $chunk, 0, $tail.Length)
+            [Array]::Copy($buf, 0, $chunk, $tail.Length, $read)
+            if ([Text.Encoding]::ASCII.GetString($chunk).Contains($needle)) { return $true }
+            $keep = [Math]::Min($needle.Length - 1, $chunk.Length)
+            $tail = New-Object byte[] $keep
+            [Array]::Copy($chunk, $chunk.Length - $keep, $tail, 0, $keep)
+        }
+        return $false
+    }
+    finally { $fs.Close() }
+}
+
 $bak = Join-Path $FirefoxDir 'browser\omni.ja.bak'
-if (-not (Test-Path $bak)) { Copy-Item $omni $bak -Force; Write-Host "Backup created: $bak" }
-else { Write-Host "Backup already exists: $bak" }
+$bakVerFile = "$bak.version"
+
+$version = ''
+$iniPath = Join-Path $FirefoxDir 'application.ini'
+if (Test-Path $iniPath) {
+    $version = (Get-Content $iniPath | Where-Object { $_ -like 'Version=*' } | Select-Object -First 1) -replace '^Version=', ''
+    $version = $version.Trim()
+}
+$bakVersion = if (Test-Path $bakVerFile) { (Get-Content $bakVerFile -Raw).Trim() } else { '' }
+$archivePatched = Test-ArchivePatched -Path $omni
+
+if (-not (Test-Path $bak)) {
+    if ($archivePatched) {
+        Write-Warning 'No backup exists and browser\omni.ja is already patched - skipping backup so a patched archive is never stored as the clean original.'
+    } else {
+        Copy-Item $omni $bak -Force
+        if ($version) { Set-Content $bakVerFile $version }
+        Write-Host "Backup created: $bak"
+    }
+}
+elseif ($version -and $bakVersion -ne $version) {
+    if ($archivePatched) {
+        Write-Warning "browser\omni.ja is already patched while the backup is from version $(if ($bakVersion) { $bakVersion } else { 'unknown' }) - keeping the existing backup. Repair/reinstall Firefox first if you need a clean archive for the current version."
+    } else {
+        Copy-Item $omni $bak -Force
+        Set-Content $bakVerFile $version
+        Write-Host "Firefox version changed ($(if ($bakVersion) { $bakVersion } else { 'unknown' }) -> $version): backup refreshed"
+    }
+}
+else {
+    Write-Host "Backup already exists: $bak$(if ($version) { " (version $version)" })"
+}
 
 # ---------- 2. patch the archive in place ----------
 Add-Type -AssemblyName System.IO.Compression.FileSystem
