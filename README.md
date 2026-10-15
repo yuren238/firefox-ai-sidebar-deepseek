@@ -32,7 +32,30 @@ On machines with multiple profiles or several Firefox installs, the script ident
 
 **Option A — one click (recommended)**
 
-Double-click `install-deepseek.bat` in Explorer, click **Yes** on the UAC prompt, then press Enter at the profile menu. The bat file requests elevation, checks that Firefox is closed, runs the patcher and shows the result.
+Double-click `install-deepseek.bat` in Explorer, click **Yes** on the UAC prompt, then press Enter at the profile menu. **Everything else is decided by the script — there is nothing to check beforehand:**
+
+- **Elevation** is handled for you; one UAC prompt, click Yes.
+- **Firefox left open is no longer a dead end**: the script asks you to close it and re-checks on Enter; press `K` to have it force-close Firefox for you (tabs are restored on next start).
+- **A blocked write is bypassed automatically** — see the "access denied" troubleshooting section below.
+- **A SUMMARY table is printed at the end** so the outcome is one glance, not a log to interpret. Any `FAIL` line makes the script exit non-zero and the bat file states plainly that the patch is incomplete.
+
+A normal run ends like this:
+
+```
+================= SUMMARY =================
+  Firefox version:         153.5.0
+  omni.ja:                 C:\Program Files\Mozilla Firefox\browser\omni.ja
+    DeepSeek chat entry:   OK     X-DeepSeek-Prompt header + provider map
+    provider list:         OK     claude,chatgpt,gemini,lechat,deepseek
+    page actor:            OK     textarea selector + Enter fallback
+    whale icon:            OK
+    clean backup:          omni.ja.bak = 153.5.0
+    startup cache:
+      [bk1xhyj0.default-esr-1776012704276]  cleared (30.0 MB released)
+===========================================
+```
+
+Those lines are produced by **reading the archive back off disk**, not by assuming the writes worked.
 
 **Option B — command line**
 
@@ -52,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -NoSystemFa
 
 The script opens the installed `browser\omni.ja` in place and patches it — no binaries are shipped. Idempotent: just re-run after every Firefox update.
 
-> **Troubleshooting — patched but DeepSeek not in the dropdown**: Firefox keeps compiled copies of its modules in the profile's **startup cache**, which lives under `%LOCALAPPDATA%\Mozilla\Firefox\Profiles\<profile>\startupCache` (not Roaming). The script clears it, but if the run was interrupted before that step, delete the folder manually and restart Firefox.
+> **Troubleshooting — patched but DeepSeek not in the dropdown**: Firefox keeps compiled copies of its modules in the profile's **startup cache**, which lives under `%LOCALAPPDATA%\Mozilla\Firefox\Profiles\<profile>\startupCache` (not Roaming). Clearing it is the last step of the patch and **it can never abort the run** — by then the patch is already on disk, so a leftover cache only affects *when* the change takes effect. A failure shows up as `PARTIAL - ... items locked` in the SUMMARY plus a hint under `Notes:`: close Firefox and re-run, or delete the folder by hand.
 
 ## Usage
 
@@ -73,7 +96,7 @@ Restores `browser\omni.ja` from the `.bak` backup (it has the same automatic SYS
 
 ## After a Firefox update
 
-Firefox updates overwrite `omni.ja` and remove the patch. Re-run `install-deepseek.bat` after updating (the backup refreshes itself for the new version). If a future version changes `GenAI.sys.mjs` beyond recognition, the script will tell you the anchor was not found.
+Firefox updates overwrite `omni.ja` and remove the patch. **Just double-click `install-deepseek.bat` again** — the script notices the version changed (`application.ini` no longer matches `omni.ja.bak.version`), refreshes the backup from the clean new archive, re-applies the patch and prints the SUMMARY. If a future version changes `GenAI.sys.mjs` beyond recognition, the script reports that its anchor was not found and stops instead of leaving a half-patched archive.
 
 > **Troubleshooting — "access to the path omni.ja is denied"**: something is intercepting the write. This happens with filesystem sandboxes (union/overlay filesystems, containers) or security-suite "file protection", and the tell-tale sign is that you **can create new files but cannot modify or delete existing ones** — elevation does not help, because the block sits in a filter driver, not in the ACL.
 >

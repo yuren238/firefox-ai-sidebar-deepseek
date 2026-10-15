@@ -32,7 +32,30 @@ Firefox 的界面代码打包在 `browser\omni.ja`（ZIP 归档）中。补丁�
 
 **方式 A —— 一键安装（推荐）**
 
-在资源管理器里双击 `install-deepseek.bat`，UAC 弹窗点「是」，在 profile 菜单直接回车即可。bat 会自动请求管理员权限、检查 Firefox 是否关闭、调用补丁器并显示结果。
+在资源管理器里双击 `install-deepseek.bat`，UAC 弹窗点「是」，在 profile 菜单直接回车即可。**其余判断全部由脚本自己完成，你不需要事先检查任何东西**：
+
+- **自动提权**：只弹一个 UAC，点「是」。
+- **Firefox 没关也不报错退出**：就近提示你关闭，按回车重新检测；也可以按 `K` 让它直接强制关闭 Firefox（标签页下次启动会恢复）。
+- **写入被拦截自动绕过**：见下方「访问被拒绝」排障一节。
+- **跑完打印 SUMMARY 汇总表**：一眼看清结果，逐行标 `OK` / `FAIL`。任何一项 `FAIL` 时脚本以非零退出码结束，bat 会明确写出「补丁未完成」。
+
+正常输出形如：
+
+```
+================= SUMMARY =================
+  Firefox version:         153.5.0
+  omni.ja:                 C:\Program Files\Mozilla Firefox\browser\omni.ja
+    DeepSeek chat entry:   OK     X-DeepSeek-Prompt header + provider map
+    provider list:         OK     claude,chatgpt,gemini,lechat,deepseek
+    page actor:            OK     textarea selector + Enter fallback
+    whale icon:            OK
+    clean backup:          omni.ja.bak = 153.5.0
+    startup cache:
+      [bk1xhyj0.default-esr-1776012704276]  cleared (30.0 MB released)
+===========================================
+```
+
+这张表是**回读磁盘上的实际内容**得出的（重新打开 `omni.ja` 检查各条目），不是「跑完了就假定成功」。
 
 **方式 B —— 命令行**
 
@@ -52,7 +75,7 @@ powershell -ExecutionPolicy Bypass -File .\Add-DeepSeekToFirefox.ps1 -NoSystemFa
 
 脚本直接就地打开已安装的 `browser\omni.ja` 打补丁，不携带任何二进制。幂等设计——每次 Firefox 更新后重跑即可。
 
-> **排障 —— 已安装但下拉菜单里没有 DeepSeek**：Firefox 会把模块的编译产物缓存在 profile 的**启动缓存**里，位置在 `%LOCALAPPDATA%\Mozilla\Firefox\Profiles\<profile>\startupCache`（注意是 Local 而不是 Roaming）。脚本会自动清理；如果那次运行在中途被打断没执行到这一步，手动删除该文件夹后重启 Firefox 即可。
+> **排障 —— 已安装但下拉菜单里没有 DeepSeek**：Firefox 会把模块的编译产物缓存在 profile 的**启动缓存**里，位置在 `%LOCALAPPDATA%\Mozilla\Firefox\Profiles\<profile>\startupCache`（注意是 Local 而不是 Roaming）。清缓存只是补丁的最后一步，**脚本不会因为它失败而中断**——补丁此时已经落盘，清不掉只影响生效时机。失败的迹象是 SUMMARY 里那一行写成 `PARTIAL - ... items locked`，并在下方 `Notes:` 里给出提示：关掉 Firefox 再跑一次，或手动删除该文件夹。
 
 ## 使用
 
@@ -73,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File .\rollback.ps1
 
 ## Firefox 更新后
 
-Firefox 更新会覆盖 `omni.ja`、移除补丁。更新后重跑 `install-deepseek.bat` 即可（备份会自动按新版本刷新）。若未来版本把 `GenAI.sys.mjs` 改得面目全非，脚本会提示找不到锚点。
+Firefox 更新会覆盖 `omni.ja`、移除补丁。**重新双击一次 `install-deepseek.bat` 就行**——脚本会自己发现版本变了（`application.ini` 的版本号与 `omni.ja.bak.version` 不一致）、自动把干净归档存成新备份、再重新打补丁，最后打印 SUMMARY。若未来版本把 `GenAI.sys.mjs` 改得面目全非，脚本会提示找不到锚点并中止，不会留下半成品。
 
 > **排障 —— 报「对路径 omni.ja 的访问被拒绝」**：说明写入被拦截。常见于文件系统沙箱（联合文件系统/容器）或安全软件的「文件保护」，典型特征是**能新建文件、却不能改写或删除已有文件**，且提权也无效（拦截在驱动层，与权限无关）。
 >

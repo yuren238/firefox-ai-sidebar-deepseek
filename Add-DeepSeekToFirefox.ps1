@@ -648,13 +648,135 @@ if ($Auto) {
 }
 
 # ---------- 4. apply pref + clear JS startup cache for the chosen profiles ----------
+# Clearing the cache must NEVER abort the run. By this point the patch is already
+# on disk, so a leftover cache is a "takes effect a little later" problem, not a
+# failure - reporting it as one sends people chasing a bug that is not there.
+#
+# Deletion goes through the .NET FileSystemInfo APIs instead of Remove-Item:
+# shell-level delete proxies (safe-delete hooks, security-suite file guards) can
+# raise terminating errors that no -ErrorAction flag suppresses.
+function Clear-StartupCache {
+    param([string]$ProfileName)
+
+    $sc = Join-Path $env:LOCALAPPDATA "Mozilla\Firefox\Profiles\$ProfileName\startupCache"
+    if (-not (Test-Path $sc)) { return 'not present (nothing to do)' }
+
+    $before = 0
+    try {
+        $before = (Get-ChildItem -LiteralPath $sc -Recurse -Force -ErrorAction SilentlyContinue |
+                   Measure-Object -Property Length -Sum).Sum
+    } catch { }
+
+    try {
+        foreach ($item in (Get-ChildItem -LiteralPath $sc -Force -ErrorAction Stop)) {
+            try {
+                if ($item.PSIsContainer) { $item.Delete($true) } else { $item.Delete() }
+            } catch { }
+        }
+    } catch { }
+
+    $left = @(Get-ChildItem -LiteralPath $sc -Recurse -Force -ErrorAction SilentlyContinue).Count
+    if ($left -eq 0) { return ('cleared ({0:N1} MB released)' -f ($before / 1MB)) }
+    return ("PARTIAL - $left item(s) locked; close Firefox completely and re-run")
+}
+
+function Get-PatchStatus {
+    # Reads the archive back and reports what actually landed on disk, so the
+    # run ends with evidence instead of a hopeful message.
+    param([string]$Path)
+    $st = [ordered]@{ Entry = $false; List = $false; Icon = $false; Actor = $false }
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $zip = [IO.Compression.ZipFile]::OpenRead($Path)
+        try {
+            foreach ($e in $zip.Entries) {
+                $full = $e.FullName
+                if ($full -eq 'modules/GenAI.sys.mjs' -or $full -eq 'actors/GenAIChild.sys.mjs') {
+                    $sr = New-Object IO.StreamReader($e.Open())
+                    $t = $sr.ReadToEnd(); $sr.Close()
+                    if ($full -eq 'modules/GenAI.sys.mjs') {
+                        $st.Entry = $t.Contains('X-DeepSeek-Prompt')
+                        $st.List  = $t.Contains('deepseek')
+                    } else {
+                        $st.Actor = $t.Contains('textarea#chat-input')
+                    }
+                } elseif ($full -like '*genai/assets/brands/deepseek.svg') {
+                    $st.Icon = $true
+                }
+            }
+        } finally { $zip.Dispose() }
+    } catch { }
+    return $st
+}
+
+$cacheResult = [ordered]@{}
 foreach ($t in $chosen) {
-    Set-ProviderPref -ProfileDir $t.FullName
-    $sc = Join-Path $env:LOCALAPPDATA "Mozilla\Firefox\Profiles\$($t.Name)\startupCache"
-    if (Test-Path $sc) {
-        Remove-Item "$sc\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "Startup cache cleared: $($t.Name)"
+    try { Set-ProviderPref -ProfileDir $t.FullName }
+    catch { Write-Host "WARNING: prefs.js not updated for $($t.Name): $($_.Exception.Message)" }
+    $cacheResult[$t.Name] = Clear-StartupCache -ProfileName $t.Name
+    Write-Host "Startup cache [$($t.Name)]: $($cacheResult[$t.Name])"
+}
+
+# ---------- 5. verify + report ----------
+# Everything this script has to decide is decided here, so a run leaves you with
+# one compact answer rather than a log to interpret.
+$verFile = Join-Path $FirefoxDir 'application.ini'
+$ffVersion = ''
+if (Test-Path $verFile) {
+    $ffVersion = ((Get-Content $verFile | Where-Object { $_ -like 'Version=*' } | Select-Object -First 1) -replace '^Version=', '').Trim()
+}
+$st = Get-PatchStatus -Path $omni
+$bakVersion = ''
+if (Test-Path "$bak.version") { $bakVersion = (Get-Content "$bak.version" -Raw).Trim() }
+
+$mark = { param($b) if ($b) { 'OK  ' } else { 'FAIL' } }
+$problems = 0
+$warnings = @()
+$rows = New-Object Collections.ArrayList
+$rows.Add(@('Firefox version', $ffVersion)) | Out-Null
+$rows.Add(@('omni.ja', $omni)) | Out-Null
+$rows.Add(@('  DeepSeek chat entry', "$(& $mark $st.Entry)   X-DeepSeek-Prompt header + provider map")) | Out-Null
+$rows.Add(@('  provider list', "$(& $mark $st.List)   claude,chatgpt,gemini,lechat,deepseek")) | Out-Null
+$rows.Add(@('  page actor', "$(& $mark $st.Actor)   textarea selector + Enter fallback")) | Out-Null
+$rows.Add(@('  whale icon', "$(& $mark $st.Icon)")) | Out-Null
+if (Test-Path $bak) {
+    $rows.Add(@('  clean backup', "omni.ja.bak = $bakVersion")) | Out-Null
+} else {
+    $rows.Add(@('  clean backup', 'MISSING')) | Out-Null
+    $warnings += 'No clean backup present, so rollback.ps1 cannot restore the original archive.'
+}
+# Cache details go on their own indented lines below the table: profile names are
+# long enough (35+ chars) to wrap a fixed-width column.
+if ($cacheResult.Count -gt 0) { $rows.Add(@('  startup cache', '')) | Out-Null }
+
+foreach ($b in @($st.Entry, $st.List, $st.Actor, $st.Icon)) { if (-not $b) { $problems++ } }
+
+Write-Host ''
+Write-Host '================= SUMMARY ================='
+foreach ($r in $rows) {
+    $line = "  {0,-24} {1}" -f ($r[0] + ':'), $r[1]
+    Write-Host $line.TrimEnd()
+}
+foreach ($k in $cacheResult.Keys) {
+    Write-Host ("      [{0}]  {1}" -f $k, $cacheResult[$k])
+    if ($cacheResult[$k] -like 'PARTIAL*') {
+        $warnings += "Startup cache for $k is only partly cleared - close every Firefox window, then re-run."
     }
+}
+Write-Host '==========================================='
+
+if ($warnings.Count -gt 0) {
+    Write-Host ''
+    Write-Host 'Notes:'
+    foreach ($w in $warnings) { Write-Host "  ! $w" }
+}
+
+if ($problems -gt 0) {
+    Write-Host ''
+    Write-Host "WARNING: $problems check(s) did NOT pass. The patch is incomplete -"
+    Write-Host 're-run this script, and if it keeps failing please report the output above.'
+    Complete-SystemSession -AsSystem:$AsSystem -LogFile $LogFile
+    throw "verification failed: $problems check(s) did not pass"
 }
 
 Write-Host "`nDone. Start Firefox and open the AI chatbot sidebar (Ctrl+Alt+X) - DeepSeek is in the dropdown."
